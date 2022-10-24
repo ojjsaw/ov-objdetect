@@ -1,0 +1,7 @@
+openvino-dev[caffe]
+ipywidgets
+matplotlib
+opencv-python-headless
+numpy
+./deps/qarpo-1.0.37-py3-none-any.whl
+./deps/application_metrics_writer-0.1-py2.py3-none-any.whl
