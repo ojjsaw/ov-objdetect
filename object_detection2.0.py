@@ -12,6 +12,8 @@
 """
 # pylint: disable=E1101
 
+import json
+import os
 import logging as log
 from argparse import ArgumentParser
 import sys
@@ -19,12 +21,10 @@ import time
 import numpy as np
 from openvino.runtime import AsyncInferQueue, Core, CompiledModel
 import cv2
-import os
 from qarpo.demoutils import progressUpdate
+import applicationMetricWriter
 
 log.basicConfig(format="[ %(levelname)s ] %(message)s", level=log.INFO, stream=sys.stdout)
-
-results = {}
 
 def build_argparser():
     """Input Arguments"""
@@ -57,7 +57,9 @@ def build_argparser():
                         type=str)
     return parser
 
-def processBoxes(frame_count, res, labels_map, prob_threshold, initial_w, initial_h, result_file):
+def process_boxes(frame_count, res, labels_map, prob_threshold, initial_w, initial_h,
+                result_file, infer_time):
+    """Extract results - bounding boxes, labels and save to file."""
     for obj in res:
         dims = ""
         # Draw only objects when probability more than specified threshold
@@ -72,15 +74,41 @@ def processBoxes(frame_count, res, labels_map, prob_threshold, initial_w, initia
                ymax=int(obj[6] * initial_h),
                class_id=class_id, det_label=det_label,
                est=round(obj[2]*100, 1),
-               time='N/A')
+               time=infer_time)
             result_file.write(dims)
 
-def callback(request, frame_id):
+def preprocess_video(video_input, pre_infer_file, processed_vid, batch_size, 
+                channels, height, width):
+    """Transform video to resize, transpose, reshape to model inputs"""
+    cap = cv2.VideoCapture(video_input)
+    video_len = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    video_width = int(cap.get(3))
+    video_height = int(cap.get(4))
+    chunk_size = batch_size*channels*width*height
+    id_ = 0
+    with open(processed_vid, 'w+b') as file:
+        time_start = time.time()
+        while cap.isOpened():
+            ret, next_frame = cap.read()
+            if not ret:
+                break
+            in_frame = cv2.resize(next_frame, (width, height))
+            in_frame = in_frame.transpose((2, 0, 1))  # Change data layout from HWC to CHW
+            in_frame = in_frame.reshape((batch_size, channels, height, width))
+            bin_frame = bytearray(in_frame)
+            file.write(bin_frame)
+            id_ += 1
+            if id_%10 == 0: 
+                progressUpdate(pre_infer_file, time.time()-time_start, id_, video_len)
+    cap.release()
+    return chunk_size, video_width, video_height, video_len
+
+def callback(request, callback_args):
     """Callback for each infer request in the queue """
-    print(frame_id)
-    # Copy the data from output tensors to numpy array and process it
-    #results_copy = {output: data[:] for output, data in request.results.items()}
-    #results.append(process_results(results_copy, frame_id))
+    frame_id, video_w, video_h, threshold, result_file, labels_map = callback_args
+    output_tensor = request.get_output_tensor()
+    process_boxes(frame_id, output_tensor.data[0][0], labels_map, threshold,
+                    video_w, video_h, result_file, round(request.latency, 2))
 
 def main():
     """EntryPoint for the program."""
@@ -100,71 +128,68 @@ def main():
 
     # Get input and output nodes.
     input_layer = compiled_model.input(0)
-    output_layer = compiled_model.output(0)
 
     # Setup output file for the program
     #job_id = str(os.environ['PBS_JOBID']).split('.')[0]
     job_id = "123456"
-    result_file = open(os.path.join(args.output_dir, job_id, 'output.txt'), "w")
+    result_file = open(os.path.join(args.output_dir, job_id, 'output.txt'), "w", encoding="utf-8")
     pre_infer_file = os.path.join(args.output_dir, job_id, 'pre_progress.txt')
     infer_file = os.path.join(args.output_dir, job_id, 'i_progress.txt')
     processed_vid = os.path.join(args.output_dir, job_id, 'processed_vid.bin')
 
     # Input layer: batch size(n), channels (c), height(h), width(w)
-    n, c, h, w = input_layer.shape
-    log.info('N:%d C:%d H:%d W:%d', n, c, h, w)
+    batch_size, channels, height, width = input_layer.shape
+    log.info('N:%d C:%d H:%d W:%d', batch_size, channels, height, width)
 
     # Preprocess video file
-    cap = cv2.VideoCapture(args.input)
-    video_len = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    video_width = int(cap.get(3))
-    video_height = int(cap.get(4))
-    CHUNKSIZE = n*c*w*h
-    id_ = 0
-    with open(processed_vid, 'w+b') as file:
-        time_start = time.time()
-        while cap.isOpened():
-            ret, next_frame = cap.read()
-            if not ret:
-                break
-            in_frame = cv2.resize(next_frame, (w, h))
-            in_frame = in_frame.transpose((2, 0, 1))  # Change data layout from HWC to CHW
-            in_frame = in_frame.reshape((n, c, h, w))
-            bin_frame = bytearray(in_frame)
-            file.write(bin_frame)
-            id_ += 1
-            if id_%10 == 0: 
-                progressUpdate(pre_infer_file, time.time()-time_start, id_, video_len)
-    cap.release()
+    chunk_size, video_width, video_height, video_len = preprocess_video(
+        args.input, pre_infer_file, processed_vid, batch_size, channels, height, width)
+    log.info(' Preprocess info - chunk_size:%d video_width:%d video_height:%d video_len:%d',
+    chunk_size, video_width, video_height, video_len)
 
-    # read labels file
+    # Read labels file
     if args.labels:
         with open(args.labels, 'r', encoding="utf-8") as file:
             labels_map = [x.strip() for x in file]
     else:
         labels_map = None
 
-    #input_data = 'd'
-    #total_frames = 100
-    #for i in range(total_frames):
-        # Wait for at least one available infer request and start asynchronous inference
-     #   infer_queue.start_async(next(input_data), userdata=i)
-
+    # Start Async Inference
     infer_time_start = time.time()
     frame_count = 0
     with open(processed_vid, "rb") as data:
         while frame_count < video_len:
-            byte = data.read(CHUNKSIZE)
+            byte = data.read(chunk_size)
             if not byte == b"":
                 deserialized_bytes = np.frombuffer(byte, dtype=np.uint8)
-                in_frame = np.reshape(deserialized_bytes, newshape=(n, c, h, w))
-                infer_queue.start_async(in_frame, userdata=frame_count)
+                in_frame = np.reshape(deserialized_bytes, 
+                                    newshape=(batch_size, channels, height, width))
+                callback_data = frame_count, video_width, video_height, args.prob_threshold, result_file, labels_map
+                infer_queue.start_async(inputs={input_layer.any_name: in_frame},
+                                        userdata=callback_data)
                 frame_count += 1
+
+            # Update inference progress tracker
+            if frame_count % 10 == 0:
+                progressUpdate(infer_file, time.time()-infer_time_start, frame_count+1, video_len+1)
 
     infer_queue.wait_all()
 
-    del compiled_model
+    # Write out stats
+    total_time = round(time.time() - infer_time_start, 2)
+    stats = {}
+    stats['time'] = str(total_time)
+    stats['fps'] = str(round(frame_count/total_time,2))
+    stats['frames'] = str(frame_count)
+    with open(os.path.join(args.output_dir, job_id, 'stats.json'), 'w', encoding="utf-8") as f:
+        json.dump(stats, f)
 
+    result_file.close()
+    applicationMetricWriter.send_application_metrics(args.model, args.device)
+
+    # clean-up
+    del compiled_model
+    os.remove(processed_vid)
 
 if __name__ == '__main__':
     sys.exit(main() or 0)
