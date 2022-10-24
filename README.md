@@ -28,12 +28,31 @@ mo \
 ```
 mkdir -p results/123456
 
+# Run the object detection code
 python3 object_detection.py -m models/mobilenet-ssd/FP16/mobilenet-ssd.xml \
                             -i data/reference-sample-data/object-detection-python/cars_1900.mp4 \
                             -o results/ \
                             -d CPU \
                             -nireq 4 \
                             --labels data/reference-sample-data/object-detection-python/labels.txt
+```
+
+```
+python3 object_detection2.0.py -m models/mobilenet-ssd/FP16/mobilenet-ssd.xml \
+                            -i data/reference-sample-data/object-detection-python/cars_1900.mp4 \
+                            -o results/ \
+                            -d CPU \
+                            --labels data/reference-sample-data/object-detection-python/labels.txt
+```
+
+```
+# Run the output video annotator code
+SCALE_FRAME_RATE=1    # scale number or output frames to input frames
+SCALE_RESOLUTION=0.5  # scale output frame resolution 
+python3 object_detection_annotate.py -i $INPUT_FILE \
+                                     -o $OUTPUT_FILE \
+                                     -f $SCALE_FRAME_RATE \
+                                     -s $SCALE_RESOLUTION
 ```
 
 ```
