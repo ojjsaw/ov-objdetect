@@ -12,6 +12,7 @@
 """
 # pylint: disable=E1101
 
+from distutils.command.config import config
 import json
 import os
 import logging as log
@@ -109,6 +110,7 @@ def callback(request, callback_args):
     """Callback for each infer request in the queue """
     frame_id, video_w, video_h, threshold, result_file, labels_map = callback_args
     output_tensor = request.get_output_tensor()
+    applicationMetricWriter.send_inference_time(request.latency)
     process_boxes(frame_id, output_tensor.data[0][0], labels_map, threshold,
                     video_w, video_h, result_file, round(request.latency, 2))
 
@@ -120,7 +122,7 @@ def main():
     core = Core()
 
     # Compile the model
-    compiled_model = core.compile_model(model=args.model, device_name=args.device)
+    compiled_model = core.compile_model(model=args.model, device_name=args.device, config={"PERFORMANCE_HINT": "THROUGHPUT"})
     if isinstance(compiled_model, CompiledModel):
         log.info('Successfully Compiled model (%s) for (%s) device', args.model, args.device)
 
@@ -128,7 +130,7 @@ def main():
     infer_queue = AsyncInferQueue(compiled_model)
     infer_queue.set_callback(callback)
 
-    # Get input and output nodes.
+    # Get input nodes.
     input_layer = compiled_model.input(0)
 
     # Setup output file for the program
