@@ -86,6 +86,7 @@ def preprocess_video(video_input, pre_infer_file, processed_vid, batch_size,
     video_height = int(cap.get(4))
     chunk_size = batch_size*channels*width*height
     id_ = 0
+    log.info('Preprocessing %d frames and saving to file.', video_len)
     with open(processed_vid, 'w+b') as file:
         time_start = time.time()
         while cap.isOpened():
@@ -101,6 +102,7 @@ def preprocess_video(video_input, pre_infer_file, processed_vid, batch_size,
             if id_%10 == 0: 
                 progressUpdate(pre_infer_file, time.time()-time_start, id_, video_len)
     cap.release()
+    log.info('Completed Preprocessing.')
     return chunk_size, video_width, video_height, video_len
 
 def callback(request, callback_args):
@@ -130,8 +132,7 @@ def main():
     input_layer = compiled_model.input(0)
 
     # Setup output file for the program
-    #job_id = str(os.environ['PBS_JOBID']).split('.')[0]
-    job_id = "123456"
+    job_id = str(os.environ['PBS_JOBID']).split('.')[0]
     result_file = open(os.path.join(args.output_dir, job_id, 'output.txt'), "w", encoding="utf-8")
     pre_infer_file = os.path.join(args.output_dir, job_id, 'pre_progress.txt')
     infer_file = os.path.join(args.output_dir, job_id, 'i_progress.txt')
@@ -139,22 +140,24 @@ def main():
 
     # Input layer: batch size(n), channels (c), height(h), width(w)
     batch_size, channels, height, width = input_layer.shape
-    log.info('N:%d C:%d H:%d W:%d', batch_size, channels, height, width)
+    log.info('Model Input Info - batch size:%d channels:%d height:%d width:%d', batch_size, channels, height, width)
 
     # Preprocess video file
     chunk_size, video_width, video_height, video_len = preprocess_video(
         args.input, pre_infer_file, processed_vid, batch_size, channels, height, width)
-    log.info(' Preprocess info - chunk_size:%d video_width:%d video_height:%d video_len:%d',
+    log.info('Preprocess info - chunk_size:%d video_width:%d video_height:%d video_len:%d',
     chunk_size, video_width, video_height, video_len)
 
     # Read labels file
     if args.labels:
         with open(args.labels, 'r', encoding="utf-8") as file:
             labels_map = [x.strip() for x in file]
+            log.info('Completed reading labels file: %s', args.labels)
     else:
         labels_map = None
 
     # Start Async Inference
+    log.info('Starting Async Inference requests')
     infer_time_start = time.time()
     frame_count = 0
     with open(processed_vid, "rb") as data:
@@ -174,6 +177,7 @@ def main():
                 progressUpdate(infer_file, time.time()-infer_time_start, frame_count+1, video_len+1)
 
     infer_queue.wait_all()
+    log.info('Completed all async requests')
 
     # Write out stats
     total_time = round(time.time() - infer_time_start, 2)
@@ -181,8 +185,8 @@ def main():
     stats['time'] = str(total_time)
     stats['fps'] = str(round(frame_count/total_time,2))
     stats['frames'] = str(frame_count)
-    with open(os.path.join(args.output_dir, job_id, 'stats.json'), 'w', encoding="utf-8") as f:
-        json.dump(stats, f)
+    with open(os.path.join(args.output_dir, job_id, 'stats.json'), 'w', encoding="utf-8") as file:
+        json.dump(stats, file)
 
     result_file.close()
     applicationMetricWriter.send_application_metrics(args.model, args.device)
