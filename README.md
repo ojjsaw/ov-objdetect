@@ -56,5 +56,11 @@ python3 object_detection_annotate.py -i $INPUT_FILE \
 ```
 
 ```
+
+python3 -m venv openvino_env && source openvino_env/bin/activate && python -m pip install --upgrade pip
+
+
 openvino-dev[tensorflow2,mxnet,caffe,onnx,pytorch,kaldi]
+
+pip3 install -r requirements-cert.txt
 ```
