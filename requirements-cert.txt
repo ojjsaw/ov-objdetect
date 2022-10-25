@@ -1,0 +1,4 @@
+openvino-dev[tensorflow2,mxnet,caffe,onnx,pytorch,kaldi]==2022.1.0
+matplotlib
+ipywidgets
+IProgress
