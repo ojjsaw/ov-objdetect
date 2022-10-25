@@ -1,6 +1,4 @@
-opencv-python-headless
-numpy
-matplotlib
-./deps/qarpo-1.0.37-py3-none-any.whl
-./deps/application_metrics_writer-0.1-py2.py3-none-any.whl
 openvino-dev[tensorflow2,mxnet,caffe,onnx,pytorch,kaldi]==2022.1.0
+matplotlib
+IProgress
+ipywidgets
